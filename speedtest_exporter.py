@@ -5,6 +5,7 @@ from threading import Thread
 import subprocess
 import argparse
 import json
+import time
 
 
 # Arguments
@@ -12,38 +13,32 @@ parser = argparse.ArgumentParser(description='Prometheus exporter for network sp
 parser.add_argument('--web.listen-address', action='store', dest='listen_addr', help='Specify host and port to display metrics for scraping.')
 parser.add_argument('--server_id', action='store', dest='server_id', help='Specify server by ID to perform speedtests on.')
 parser.add_argument('--bind_ip', action='store', dest='bind_ip', help='Bind to specific source IP address to run speedtests from.')
+parser.add_argument('--interval', action='store', dest='interval', help='Set interval in seconds on how often data should be updated.')
 
 
 # Attributes
-speedtest_cmd = 'speedtest-cli --json'
+speedtest_cmd = 'speedtest-cli --json --bytes'
+metrics_set = False
 metrics = {
-    'speedtest_ping': Gauge('speedtest_ping', 'Current ping time in milliseconds.', ['sponsor', 'host']),
-    'speedtest_download': Gauge('speedtest_download', 'Current network download speed in bytes per second.', ['sponsor', 'host']),
-    'speedtest_upload': Gauge('speedtest_upload', 'Current network upload speed in bytes per second.', ['sponsor', 'host'])
+    'speedtest_ping': Gauge('speedtest_ping', 'Current ping time in milliseconds.'),
+    'speedtest_download': Gauge('speedtest_download', 'Current network download speed in bytes/sec.'),
+    'speedtest_upload': Gauge('speedtest_upload', 'Current network upload speed in bytes/sec.')
 }
 
 
-def mbit_to_bytes(_value):
-    # Convert Mbit to bit
-    _value *= 1000000
-
-    # Bit to bytes
-    _value *= 0.125
-
-    return _value
-
-
 def update_metrics():
-    output = subprocess.Popen(speedtest_cmd.split(' '), shell=True, stdout=subprocess.PIPE)
+    global metrics, metrics_set
+    output = subprocess.Popen(speedtest_cmd.split(' '), stdout=subprocess.PIPE)
     # stdout, stderr
     raw_json, _ = output.communicate()
     data = json.loads(raw_json)
 
-    sponsor = data['sponsor']
-    host = data['host']
-    metrics['speedtest_ping'].labels(sponsor=sponsor, host=host).set(data['latency'])
-    metrics['speedtest_download'].labels(sponsor=sponsor, host=host).set(mbit_to_bytes(data['download']))
-    metrics['speedtest_upload'].labels(sponsor=sponsor, host=host).set(mbit_to_bytes(data['upload']))
+    sponsor = data['server']['sponsor']
+    host = data['server']['host']
+    metrics['speedtest_ping'].set(data['ping'])
+    metrics['speedtest_download'].set(data['download'])
+    metrics['speedtest_upload'].set(data['upload'])
+    metrics_set = True
 
 
 def metrics_updater(_interval):
@@ -55,36 +50,47 @@ def metrics_updater(_interval):
 # Main
 if __name__ == '__main__':
     # Handle arguments
-    if parser.server_id:
-        speedtest_cmd += ' --server {}'.format(parser.server_id)
-    if parser.bind_ip:
-        speedtest_cmd += ' --source {}'.format(parser.bind_ip)
+    interval = 10
+    options = parser.parse_args()
+    if options.server_id:
+        speedtest_cmd += ' --server {}'.format(options.server_id)
+    if options.bind_ip:
+        speedtest_cmd += ' --source {}'.format(options.bind_ip)
+    if options.interval:
+        interval = int(options.interval)
 
     # Run tests
-    print('Performing test speedtest before running metrics updater...')
+    print('INFO: Performing test speedtest before running metrics updater...')
     try:
         subprocess.Popen(speedtest_cmd.split(' '), shell=True, stdout=subprocess.PIPE)
     except:
         print('ERROR: Invalid server id or IP to bind to!')
         exit()
+    print('INFO: Tests complete!')
     
     # Start metrics updater
-    Thread(target=update_metrics).start()
+    Thread(target=metrics_updater, args=(interval, )).start()
+
+    # Wait till initial metrics are set
+    print('INFO: Waiting for initial metrics to be set...')
+    while not metrics_set:
+        time.sleep(1)
+    print('INFO: Initial metrics are set! Proceeding to start HTTP service...')
 
     # Start HTTP server
     try:
-        if parser.listen_addr:
-            if len(parser.listen_addr.split(':')) == 2:
-                ip = parser.listen_addr.split(':')[0]
-                port = int(parser.listen_addr.split(':')[-1])
+        if options.listen_addr:
+            if len(options.listen_addr.split(':')) == 2:
+                ip = options.listen_addr.split(':')[0]
+                port = int(options.listen_addr.split(':')[-1])
                 print('INFO: Listening on {}:{}...'.format(ip, port))
-                start_http_server(ip, addr=port)
+                start_http_server(port, addr=ip)
             else:
                 print('ERROR: Invalid web.listen_address value! Must have IP and port separated by : !')
                 exit()
         else:
             print('INFO: Listening on {}:{}...'.format('0.0.0.0', 9100))
-            start_http_server('0.0.0.0', addr=9100)
+            start_http_server(9100, addr='0.0.0.0')
     except:
         print('ERROR: Invalid IP for web.listen_address flag!')
         exit()
