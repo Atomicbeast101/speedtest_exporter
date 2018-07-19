@@ -31,7 +31,7 @@ def update_metrics():
     output = subprocess.Popen(speedtest_cmd.split(' '), stdout=subprocess.PIPE)
     # stdout, stderr
     raw_json, _ = output.communicate()
-    data = json.loads(raw_json)
+    data = json.loads(raw_json.decode())
 
     sponsor = data['server']['sponsor']
     host = data['server']['host']
