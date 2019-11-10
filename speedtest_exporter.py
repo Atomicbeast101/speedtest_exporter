@@ -17,8 +17,8 @@ parser.add_argument('--interval', action='store', dest='interval', help='How oft
 # Attributes
 metrics = {
     'speedtest_ping': prometheus_client.Gauge('speedtest_ping', 'Ping time in milliseconds.', ['server_name', 'server_loc', 'server_id']),
-    'speedtest_download': prometheus_client.Gauge('speedtest_download', 'Network download speed in bytes/sec.', ['server_name', 'server_loc', 'server_id']),
-    'speedtest_upload': prometheus_client.Gauge('speedtest_upload', 'Network upload speed in bytes/sec.', ['server_name', 'server_loc', 'server_id'])
+    'speedtest_download': prometheus_client.Gauge('speedtest_download', 'Network download speed in Mbps.', ['server_name', 'server_loc', 'server_id']),
+    'speedtest_upload': prometheus_client.Gauge('speedtest_upload', 'Network upload speed in Mbps.', ['server_name', 'server_loc', 'server_id'])
 }
 
 # Classes
@@ -37,13 +37,17 @@ class UpdateMetrics(threading.Thread):
                 tester.get_servers(self.servers)
                 tester.get_best_server()
                 tester.download()
-                tester.upload(pre_allocate=False)
+                tester.upload()
                 result = tester.results.dict()
                 
+                # Convert bytes to Mbps
+                download_speed = result['download'] / 1000000.0
+                upload_speed = result['upload'] / 1000000.0
+
                 # Update metrics
                 metrics['speedtest_ping'].labels(server_name=result['server']['name'], server_loc=result['server']['country'], server_id=result['server']['id']).set(result['ping'])
-                metrics['speedtest_download'].labels(server_name=result['server']['name'], server_loc=result['server']['country'], server_id=result['server']['id']).set(result['download'])
-                metrics['speedtest_upload'].labels(server_name=result['server']['name'], server_loc=result['server']['country'], server_id=result['server']['id']).set(result['upload'])
+                metrics['speedtest_download'].labels(server_name=result['server']['name'], server_loc=result['server']['country'], server_id=result['server']['id']).set(download_speed)
+                metrics['speedtest_upload'].labels(server_name=result['server']['name'], server_loc=result['server']['country'], server_id=result['server']['id']).set(upload_speed)
                 print('INFO: Metrics updated!', flush=True)
             except Exception:
                 # Set metrics to -1
